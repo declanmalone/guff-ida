@@ -1,5 +1,19 @@
 
-//! # Finite field matrix operations for threshold schemes
+//! # A crate for working with Cauchy and Vandermonde matrices
+//!
+//! A small collection of routines for creating matrices that can be
+//! used to implement erasure (error-correction) schemes or threshold
+//! schemes using Galois fields.
+//!
+//! Note that this crate only provides data for insertion into a
+//! matrix. For the missing functionality, see:
+//!
+//! * [guff](https://crates.io/crates/guff) : basic operations over
+//!   finite fields, including vector operations
+//! * [guff-matrix](https://crates.io/crates/guff-matrix) : full set
+//!   of matrix types and operations
+//!
+//! # Using finite field matrix operations for threshold schemes
 //! 
 //! A "threshold scheme" is a mathematical method for securely
 //! splitting a secret into a number of "shares" such that:
@@ -40,67 +54,19 @@
 //!
 //! More details of the algorithm can be found [later](todo).
 //!
-//! ## Specific Functionality
-//!
-//! This module provides fairly typical implementation of matrices,
-//! but one tailored to the particular use case outlined above. It is
-//! *not* useful as a general Matrix library. The main differences are:
-//! 
-//! * calculations are done in a finite field (Galois Field) rather
-//! than on regular integers or floats
-//!
-//! * special consideration is given to the layout of data values
-//! within the matrices to better support the IDA algorithm
-//!
-//! * additional functionality for creating and inverting the
-//! transform matrix
-//!
-//! ## Generic implementation for different Galois fields
-//!
-//! In general, apart from constructors, all exported traits and
-//! functions are generic across different Galois field sizes, eg
-//! GF(2<sup>8</sup>), GF(2<sup>16</sup>) or GF(2<sup>32</sup>). These
-//! all map onto regular integer types. I am currently using my own
-//! crate [gf_2px](gf_2px) for constructing a field and performing
-//! maths in it.
-//!
-//! A quirk of the `gf_2px` crate is that it uses a pair of types to
-//! uniquely identify a field size, eg:
-//!
-//!     GenericField<T : NumericOps, P : NumericOps>
-//!
-//! or, when made concrete:
-//!
-//!     Field<u8,u16>
-//!
-//! The first type, `T` represents the underlying storage type to use,
-//! while `P` is a larger type that can be used to do non-modular (ie,
-//! overflowing) multiplication of values, or to store the field
-//! polynomial (which is always larger than the field values).
-//!
-//! The reason for using a pair of types was to allow me to
-//! distinguish between GF(2<sup>4</sup>), which fits in a nibble, but
-//! has no corresponding primitive integer type, and
-//! GF(2<sup>8</sup>), which does.
-//!
-//! This module will not attempt to support GF(2<sup>4</sup>) at the
-//! moment since it would complicate the generic implementation of the
-//! other field sizes. However, for the moment, at least, I will stick
-//! with the `<T,P>` representation for generic field.
-//!
 
 // will need to use external gf_2px
-use num;
-use num_traits;
-use gf_2px::field::*;
+//use num;
+use num_traits::identities::{One,Zero};
+use guff::*;
 
 //impl From<u32> for NumericOps {
 //     fn from(val: u32) -> Self { val as Self }
 //}
 
 
-
 /// ## Vandermonde-form matrix
+/// ```ascii
 ///
 ///     |     0    1    2          k-1  |
 ///     |    0    0    0   ...    0     |
@@ -112,6 +78,7 @@ use gf_2px::field::*;
 ///     |                               |
 ///     |     0    1    2          k-1  |
 ///     |  n-1  n-1  n-1   ...  n-1     |
+/// ```
 ///
 /// Can be used for Reed-Solomon coding, or a version of it,
 /// anyway. This is not the most general form of a Vandermonde matrix,
@@ -120,36 +87,37 @@ use gf_2px::field::*;
 ///
 /// Return is as a single vector of n rows, each of k elements
 
-pub fn vandermonde_matrix<T, P>
-    (field : &impl GenericField<T,P>, k: P, n : T)
-    -> Vec<T>
-where T: NumericOps, P: NumericOps
+pub fn vandermonde_matrix<G> (field : &G, k: usize, n : usize)
+    -> Vec<G::E>
+where G : GaloisField, G::E : Into<usize>, G::EE : Into<usize>
 {
-    let zero = T::zero();
-    let one  = T::one();
+    let zero = G::E::zero();
+    let one  = G::E::one();
 
-    let mut v = Vec::<T>::new();
-    if k < P::one() || n < one {
+    let mut v = Vec::<G::E>::new();
+    if k < 1 || n < 1 {
 	return v
     }
 
     // If pow() is expensive, can use repeated multiplications below.
     
     // range op won't work, so use while loop
+    
     let mut row = zero;
-    while row < n {
-	let mut col = P::zero();
-	while col < k {
+    while row.into() < n {
+	let mut col = G::EE::zero();
+	while col.into() < k {
 	    v.push(field.pow(row, col));
-	    col = col + P::one();
+	    col = col + G::EE::one();
 	}
 	row = row + one
     }
     v
 }
 
-/// ## Cauchy-form matrix
+/// ## Cauchy-form matrix generated from a key
 ///
+/// ```ascii
 ///                 k columns
 ///
 ///     |     1        1             1     |
@@ -165,6 +133,7 @@ where T: NumericOps, P: NumericOps
 ///     |     1        1             1     |
 ///     |  -------  -------  ...  -------  |
 ///     |  xn + y1  xn + y2       xn + yk  |
+///```
 ///
 /// All [y1 .. yk, x1 .. xn] field values must be distinct non-zero
 /// values
@@ -186,13 +155,12 @@ where T: NumericOps, P: NumericOps
 ///
 /// We don't operate on k, n to produce field values, so they can be
 /// passed in as regular types
-pub fn cauchy_matrix<T, P>
-    (field : &impl GenericField<T,P>,
-     key : &Vec<T>, k: usize, n : usize)
-    -> Vec<T>
-where T: NumericOps, P: NumericOps
+pub fn cauchy_matrix<G>
+    (field : &G, key : &Vec<G::E>, k: usize, n : usize)
+    -> Vec<G::E>
+where G : GaloisField,
 {
-    let mut v = Vec::<T>::new();
+    let mut v = Vec::<G::E>::new();
     let vlen = key.len();
 
     // I can change signature to return a Result later, but for now
@@ -204,8 +172,8 @@ where T: NumericOps, P: NumericOps
     }
 
     // slice format?
-    let y : &[T] = &key[0..k];
-    let x : &[T] = &key[k..];
+    let y : &[G::E] = &key[0..k];
+    let x : &[G::E] = &key[k..];
 
     // populate vector row by row
     for i in 0..n {
@@ -216,31 +184,30 @@ where T: NumericOps, P: NumericOps
     v
 }
 
-// If we keep the "key" used to generate the forward Cauchy matrix, it
-// can be used to calculate the inverse more efficiently than doing
-// full Gaussian elimination.
-//
-// See:
-// * https://en.wikipedia.org/wiki/Cauchy_matrix
-// * https://proofwiki.org/wiki/Inverse_of_Cauchy_Matrix
-//
-// Note that the inverse is a k*k matrix, so 2k distinct values must
-// be passed in:
-//
-// * the fixed y1 .. yk values
-// * a selection of k x values corresponding to the
-//   k rows being combines
+/// # Generate inverse Cauchy matrix using a key
+///
+/// If the "key" used to generate the forward Cauchy matrix is saved,
+/// it can be used to calculate the inverse more efficiently than
+/// doing full Gaussian elimination.
+///
+/// See:
+/// * <https://en.wikipedia.org/wiki/Cauchy_matrix>
+/// * <https://proofwiki.org/wiki/Inverse_of_Cauchy_Matrix>
+///
+/// Note that the inverse is a k\*k matrix, so 2\*k distinct values
+/// must be passed in:
+///
+/// * the fixed `y1 .. yk` values
+/// * a selection of k x values corresponding to the
+///   k rows being combined
 
-pub fn cauchy_inverse_matrix<T, P>
-    (field : &impl GenericField<T,P>,
-     key : &Vec<T>, k: usize)
-    -> Vec<T>
-where T: NumericOps, P: NumericOps
+pub fn cauchy_inverse_matrix<G>
+    (field : &G, key : &Vec<G::E>, k: usize) -> Vec<G::E>
+where G : GaloisField
 {
-    let zero = T::zero();
-    let one  = T::one();
+    let one  = G::E::one();
 
-    let mut v = Vec::<T>::new();
+    let mut v = Vec::<G::E>::new();
 
     let vlen = key.len();
     if vlen != 2 * k {
@@ -249,10 +216,12 @@ where T: NumericOps, P: NumericOps
     }
 
     // slice as before
-    let y : &[T] = &key[0..k];
-    let x : &[T] = &key[k..];
+    let y : &[G::E] = &key[0..k];
+    let x : &[G::E] = &key[k..];
 
-    if k < 3 {
+    // the reference version works, but the optimised version
+    // doesn't. Only enabling reference version for now.
+    if k != 0 {		      // was k < 3
 	// this is the basic reference algorithm
 	let n = k;		// alias to use i, j, k for loops
 	for i in 0..n {		// row
@@ -277,6 +246,8 @@ where T: NumericOps, P: NumericOps
 	}
 
     } else {
+	// TODO: find bug in this code
+	//
 	// optimised version of the above that notes that we
 	// calculate the following in the inner loop:
 	//
@@ -285,8 +256,9 @@ where T: NumericOps, P: NumericOps
 	//
 	// These can be calculated outside the main loop and reused.
 	//
+	//
 	let n = k;
-	let mut imemo = Vec::<T>::with_capacity(k);
+	let mut imemo = Vec::<G::E>::with_capacity(k);
 	for i in 0..n {
 	    let mut bot = one;
 	    let yi = y[i];
@@ -296,7 +268,7 @@ where T: NumericOps, P: NumericOps
 	    }
 	    imemo.push(bot)
 	}
-	let mut jmemo = Vec::<T>::with_capacity(k);
+	let mut jmemo = Vec::<G::E>::with_capacity(k);
 	for j in 0..n {
 	    let mut bot = one;
 	    let xj = x[j];
@@ -348,10 +320,12 @@ where T: NumericOps, P: NumericOps
 //     rowwise : bool,
 // }
 
+// Vector stuff done in guff crate
+/*
 // vector product ... multiply each vector element -> new vector
-fn vector_mul<T,P>(field : &impl GenericField<T,P>,
-		   dst : &mut [T], a : &[T], b : &[T])
-where T: NumericOps, P : NumericOps {
+fn vector_mul<G>(field : &G,
+		   dst : &mut [G::E], a : &[G::E], b : &[G::E])
+where G : GaloisField {
     //    let prod = T::one;
     let (mut a_iter, mut b_iter) = (a.iter(), b.iter());
     for d in dst.iter_mut() {
@@ -360,15 +334,18 @@ where T: NumericOps, P : NumericOps {
 }
 
 // dot product ... sum of items in vector product -> value
-fn dot_product<T,P>(field : &impl GenericField<T,P>,
-		    a : &[T], b : &[T]) -> T
-where T: NumericOps, P : NumericOps {
-    let mut sum : T = T::zero();
+fn dot_product<G>(field : &G,
+		    a : &[G::E], b : &[G::E]) -> G::E
+where G : GaloisField {
+    let mut sum = G::E::zero();
     for (a_item, b_item) in a.iter().zip(b) {
 	sum = sum ^ field.mul(*a_item, *b_item);
     }
     sum
 }
+ */
+
+// Matrix stuff done in guff-matrix
 
 // I think that I'll make rowwise and colwise matrices different
 // types. Different type constraints, anyway. This makes sense for
@@ -486,6 +463,9 @@ where T : NumericOps,
 //   matrix subtype
  */
 
+// comment out matrix code
+
+/*
 // Put Accessors into a separate trait. I'm trying to see if I can get
 // a default implementation that has the same members. Mmm... probably
 // not. I suppose that a macro is the only solution to avoiding all
@@ -667,6 +647,8 @@ fn construct_checked_matrix<T : NumericOps>
     }
 }
 
+*/
+
 // Following on from the names above, I think I'll rename the two
 // traits that each struct should implement according to whether it's
 // layout-neutral or layout-specific/-sensitive.
@@ -716,6 +698,11 @@ fn construct_checked_matrix<T : NumericOps>
 
 mod tests {
     use super::*;
+    // use num_traits::identities::{One,Zero};
+
+    // External crate only used in development/testing
+    use guff_matrix::*;
+    use guff_matrix::x86::*;
 
     #[test]
     fn vandermonde_works() {
@@ -733,14 +720,165 @@ mod tests {
 	}
     }
 
+    // The only sure-fire way to test the functions is to do a matrix
+    // multiplication, then do the inverse and check whether the
+    // result is the same as the original...
+    //
+    // I should have most of what I need in guff-matrix crate
+
+    const SAMPLE_DATA : [u8; 20] = [
+	1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+	11, 12, 13, 14, 15, 16, 17, 18, 19, 20
+    ];
+
+    // Direct copy from guff_matrix::simulator
+    pub fn interleave_streams(dest : &mut [u8], slices : &Vec<&[u8]>) {
+
+	let cols = dest.len() / slices.len();
+	let mut dest = dest.iter_mut();
+	let mut slice_iters : Vec::<_> = Vec::with_capacity(slices.len());
+	for s in slices {
+	    let iter = s.iter();
+	    slice_iters.push(iter);
+	}
+
+	for _ in 0 .. cols {
+	    for slice in &mut slice_iters {
+		*dest.next().unwrap() = *slice.next().unwrap();
+	    }
+	}
+    }
+
+    #[test]
+    fn test_cauchy_transform() {
+
+	// 4x4 xform matrix is the smallest allowed right now
+	let key = vec![ 1, 2, 3, 4, 5, 6, 7, 8 ];	
+	let field = new_gf8(0x11b, 0x1b);
+	let cauchy_data = cauchy_matrix(&field, &key, 4, 4);
+
+	// guff-matrix needs either/both/all:
+	// * architecture-neutral matrix type (NoSimd option)
+	// * automatic selection of arch-specific type (with fallback)
+	// * new_matrix() type constructors?
+	//
+	// For now, though, the only concrete matrix types that are
+	// implemented are for supporting x86 simd operation, so use
+	// those (clunky) names...
+
+	let mut xform = X86SimpleMatrix::<x86::X86u8x16Long0x11b>
+	    ::new(4,4,true);
+	xform.fill(&cauchy_data);
+
+	// must choose cols appropriately (gcd requirement)
+	let mut input = X86SimpleMatrix::<x86::X86u8x16Long0x11b>
+	    ::new(4,5,false);
+	input.fill(&SAMPLE_DATA);
+
+	let mut output = X86SimpleMatrix::<x86::X86u8x16Long0x11b>
+	    ::new(4,5,true);
+
+	// use non-SIMD multiply
+	
+	reference_matrix_multiply(&mut xform, &mut input,
+				  &mut output, &field);
+
+	// We will also need a transposition (interleaving) step to
+	// convert the rowwise output matrix from above into colwise
+	// format for the inverse transform
+
+	// Right now, only implementation of interleaver is in the
+	// simulation module... copying it in here
+
+	// we need to do some up-front work to use that:
+	let array = output.as_slice();
+	let slices : Vec<&[u8]> = array.chunks(5).collect();
+	let mut dest = [0u8; 20];
+	
+	interleave_streams(&mut dest, &slices);
+
+	// Do the inverse transform (same key)
+
+	let cauchy_data = cauchy_inverse_matrix(&field, &key, 4);
+	let mut xform = X86SimpleMatrix::<x86::X86u8x16Long0x11b>
+	    ::new(4,4,true);
+	xform.fill(&cauchy_data);
+
+	let mut input = X86SimpleMatrix::<x86::X86u8x16Long0x11b>
+	    ::new(4,5,false);
+	input.fill(&dest);
+
+	let mut output = X86SimpleMatrix::<x86::X86u8x16Long0x11b>
+	    ::new(4,5,false);
+
+	// use non-SIMD multiply
+	reference_matrix_multiply(&mut xform, &mut input,
+				  &mut output, &field);
+
+	assert_eq!(output.as_slice(), &SAMPLE_DATA);
+	
+    }
+
+    // Another test I could do would be to multiply the Cauchy matrix
+    // by its inverse and check that the result is the identity
+    // matrix. However, as it currently stands, guff-matrix doesn't
+    // allow for general-purpose matrix multiply yet, since it's
+    // optimised for xform/input matrix pairs that satisfy the gcd
+    // property.
+    //
+    // Ah, I think I can ... no gcd checks in matrix_multiply
+    #[test]
+    fn test_inv_inv_cauchy() {
+	// 4x4 xform matrix is the smallest allowed right now
+	let key = vec![ 1, 2, 3, 4, 5, 6, 7, 8 ];	
+	let field = new_gf8(0x11b, 0x1b);
+
+	let forward_data = cauchy_matrix(&field, &key, 4, 4);
+	let mut xform = X86SimpleMatrix::<x86::X86u8x16Long0x11b>
+	    ::new(4,4,true);
+	xform.fill(&forward_data);
+
+	// data returned from cauchy_inverse_matrix needs to be
+	// interleaved if it's in the 'input' position
+
+	let inverse_data = cauchy_inverse_matrix(&field, &key, 4);
+
+	let array = inverse_data;
+	let slices : Vec<&[u8]> = array.chunks(4).collect();
+	let mut dest = [0u8; 16];
+
+	interleave_streams(&mut dest, &slices);
+	
+	let mut input = X86SimpleMatrix::<x86::X86u8x16Long0x11b>
+	    ::new(4,4,false);
+	input.fill(&dest);
+
+	let mut output = X86SimpleMatrix::<x86::X86u8x16Long0x11b>
+	    ::new(4,4,true);
+
+	// use non-SIMD multiply
+	reference_matrix_multiply(&mut xform, &mut input,
+				  &mut output, &field);
+
+	assert_eq!(output.as_slice(),
+		   [ 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 ]
+	)
+
+    }
+
+    
+    // Can't test Vandermonde yet because I haven't implemented matrix
+    // inversion here or in guff-matrix
+    
+    /*
     // Might as well start writing some test cases
     #[test]
     fn test_making_vectors() {
 	// can we convert u8 to T?
 	let a = [0u8,1,2,3,4];
 	// do I have to clone() to prevent getting refs?
-	let mut v1 : Vec<u8> = a.iter().cloned().collect();
-	let mut v2 : Vec<u8> = a.iter().cloned().collect();
+	let v1 : Vec<u8> = a.iter().cloned().collect();
+	let v2 : Vec<u8> = a.iter().cloned().collect();
 	let mut v3 : Vec<u8> = a.iter().cloned().collect();
 	let f = new_gf8(0x11b,0x1b);
 
@@ -749,6 +887,9 @@ mod tests {
 	vector_mul(&f, &mut v3, &v1, &v2);
 	assert_ne!(v1, v3);
     }
+     */
+
+    /*
 
     #[test]
     fn test_dot_products() {
@@ -758,8 +899,8 @@ mod tests {
 	let a = [0u8, 1, 1, 9, 4, 8, 4];
 	let b = [0u8, 0, 2, 0, 1, 1, 1];
 	// do I have to clone() to prevent getting refs?
-	let mut v1 : Vec<u8> = a.iter().cloned().collect();
-	let mut v2 : Vec<u8> = b.iter().cloned().collect();
+	let v1 : Vec<u8> = a.iter().cloned().collect();
+	let v2 : Vec<u8> = b.iter().cloned().collect();
 	let f = new_gf8(0x11b,0x1b);
 
 	// should change v3
@@ -767,7 +908,6 @@ mod tests {
 	let sum = dot_product(&f, &v1, &v2);
 	assert_eq!(sum, 0 ^ 0 ^ 2 ^ 0 ^ 4 ^ 8 ^ 4);
     }
-
     #[test]
     fn test_construct_checked_matrix() {
 	let mat = construct_checked_matrix::<u8>(3, 4, false);
@@ -880,4 +1020,5 @@ mod tests {
     fn test_cauchy_inverse_identity() {
 	todo!()
     }
+*/
 }

@@ -1,17 +1,23 @@
 [package]
 name = "guff-ida"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2018"
 description = "Information Dispersal Algorithm"
 homepage = "https://github.com/declanmalone/guff-ida"
 categories = ["mathematics"]
-keywords = ["IDA", "Galois", "matrix", "maths"]
+keywords = ["IDA", "Galois", "secret-sharing", "maths", "erasure"]
 license = "GPL-2.0-or-later OR LGPL-2.0-or-later"
 authors = ["Declan Malone <idablack@users.sourceforge.net>"]
 
 # Use criterion for benchmarking all sorts of things
 [dev-dependencies]
 criterion = "0.3"
+
+# use guff-matrix as a dev dependency only; this
+# crate won't provide any actual matrix code so
+# guff-matrix lets us write unit tests on actual
+# matrices.
+guff-matrix = "0.1.8"
 
 [[bench]]
 name = "bench"
@@ -24,5 +30,6 @@ debug = true
 
 [dependencies]
 guff = "0.1.7"
-guff-matrix = "0.1.7"
+# "num" = "0.4.0"
+"num-traits" = "0.2.14"
 
