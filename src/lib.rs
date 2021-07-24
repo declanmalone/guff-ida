@@ -160,7 +160,7 @@ pub fn cauchy_matrix<G>
     -> Vec<G::E>
 where G : GaloisField,
 {
-    let mut v = Vec::<G::E>::new();
+    let mut v = Vec::<G::E>::with_capacity(k * n);
     let vlen = key.len();
 
     // I can change signature to return a Result later, but for now
@@ -172,7 +172,7 @@ where G : GaloisField,
     }
 
     // slice format?
-    let y : &[G::E] = &key[0..k];
+    let y : &[G::E] = &key[..k];
     let x : &[G::E] = &key[k..];
 
     // populate vector row by row
@@ -216,7 +216,7 @@ where G : GaloisField
     }
 
     // slice as before
-    let y : &[G::E] = &key[0..k];
+    let y : &[G::E] = &key[..k];
     let x : &[G::E] = &key[k..];
 
     // the reference version works, but the optimised version
@@ -816,6 +816,15 @@ mod tests {
 				  &mut output, &field);
 
 	assert_eq!(output.as_slice(), &SAMPLE_DATA);
+
+	unsafe {
+	    // use SIMD multiply
+	    simd_warm_multiply(&mut xform, &mut input,
+			       &mut output);
+	}
+
+	assert_eq!(output.as_slice(), &SAMPLE_DATA);
+
 	
     }
 
